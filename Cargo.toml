@@ -1,0 +1,14 @@
+[package]
+name = "ibapi"
+version = "0.1.0"
+authors = ["Kwok Yang Bin <yangbin@fragnetics.com>"]
+
+[lib]
+name = "ibapi"
+path = "src/lib.rs"
+
+[dependencies]
+env_logger = "*"
+log = "*"
+serde = "*"
+serde_macros = "*"
