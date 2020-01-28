@@ -4,7 +4,7 @@ extern crate ibapi;
 use std::env::args;
 
 fn main() {
-    env_logger::init().unwrap();
+    env_logger::init();
 
     let args: Vec<_> = args().collect();
 

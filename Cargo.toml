@@ -2,13 +2,13 @@
 name = "ibapi"
 version = "0.1.0"
 authors = ["Kwok Yang Bin <yangbin@fragnetics.com>"]
+edition = "2018"
 
 [lib]
 name = "ibapi"
 path = "src/lib.rs"
 
 [dependencies]
-env_logger = "*"
-log = "*"
-serde = "*"
-serde_macros = "*"
+env_logger = "0.7"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
