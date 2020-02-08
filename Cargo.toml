@@ -9,6 +9,8 @@ name = "ibapi"
 path = "src/lib.rs"
 
 [dependencies]
+crossbeam-channel = "0.4"
 env_logger = "0.7"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
+smart-default = "0.6"

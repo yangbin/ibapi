@@ -1,8 +1,8 @@
-use std::io::BufRead;
+use std::io::{BufRead, Cursor};
 use std::io::Error as IoError;
+use std::str::FromStr;
 
-use log::debug;
-use serde::{self, forward_to_deserialize_any};
+use log::{debug, error};
 use serde::de::Visitor;
 use serde::de::Error as DeError;
 use serde::de::value::Error as SerdeError;
@@ -28,50 +28,102 @@ impl<R: BufRead> Deserializer<R> {
         }
     }
 
-    fn read_string(&mut self) -> DeserializeResult<String> {
-        let mut buffer = Vec::new();
+    pub fn new_v100plus(r: &mut R) -> Result<Deserializer<Cursor<Vec<u8>>>, SerdeError> {
+        let mut len = [0; 4];
 
-        let len = self.reader.read_until(EOL, &mut buffer).map_err(convert_io_error)?;
+        r.read_exact(&mut len)
+            .map_err(convert_io_error)?;
+
+        let len = u32::from_be_bytes(len);
+
+        let mut buffer = vec![0; len as usize];
+
+        r.read_exact(&mut buffer)
+            .map_err(convert_io_error)?;
+
+        Ok(Deserializer::new(Cursor::new(buffer)))
+    }
+
+    fn read_field<T: FromStr>(&mut self) -> DeserializeResult<T> {
+        let mut buffer = Vec::new();
+        let len = self.reader.read_until(EOL, &mut buffer)
+            .map_err(convert_io_error)?;
 
         if len == 0 {
             return Err(SerdeError::custom("EOF"))
         }
 
-        buffer.pop();
+        buffer.pop(); // throw away EOL
+        debug!(">>> {:?}", buffer);
+        debug!("  > {}", String::from_utf8_lossy(&buffer));
 
-        debug!(">>> {}", String::from_utf8_lossy(&buffer));
-        Ok(String::from_utf8_lossy(&buffer).into_owned())
+        std::str::from_utf8(&buffer)
+            .map_err(SerdeError::custom)?
+            .parse()
+            .map_err(|_| SerdeError::custom(format!("Parse error: expected {}", std::any::type_name::<T>())))
+    }
+}
+
+macro_rules! deserialize_parsable {
+    ($deserialize_method:ident, $visit_method:ident) => {
+        #[inline]
+        fn $deserialize_method<V>(self, visitor: V) -> DeserializeResult<V::Value>
+            where V: Visitor<'de>,
+        {
+            visitor.$visit_method(self.read_field()?)
+        }
+    }
+}
+
+macro_rules! deserialize_unimplemented {
+    ($deserialize_method:ident) => {
+        fn $deserialize_method<V>(self, _visitor: V) -> DeserializeResult<V::Value>
+            where V: Visitor<'de>,
+        {
+            error!(stringify!($deserialize_method, "not implemented"));
+            unimplemented!()
+        }
     }
 }
 
 impl<'de, 'a, R: BufRead> serde::Deserializer<'de> for &'a mut Deserializer<R> {
     type Error = SerdeError;
 
-    fn deserialize_any<V>(self, visitor: V) -> DeserializeResult<V::Value>
-        where V: Visitor<'de>
-    {
-        panic!("Deserializer::deserialize_any is not supported")
-    }
+    deserialize_parsable!(deserialize_i8, visit_i8);
+    deserialize_parsable!(deserialize_i16, visit_i16);
+    deserialize_parsable!(deserialize_i32, visit_i32);
+    deserialize_parsable!(deserialize_i64, visit_i64);
+    deserialize_parsable!(deserialize_i128, visit_i128);
+    deserialize_parsable!(deserialize_u8, visit_u8);
+    deserialize_parsable!(deserialize_u16, visit_u16);
+    deserialize_parsable!(deserialize_u32, visit_u32);
+    deserialize_parsable!(deserialize_u64, visit_u64);
+    deserialize_parsable!(deserialize_u128, visit_u128);
+    deserialize_parsable!(deserialize_f32, visit_f32);
+    deserialize_parsable!(deserialize_f64, visit_f64);
+    deserialize_parsable!(deserialize_string, visit_string);
 
-    fn deserialize_u64<V>(self, visitor: V) -> DeserializeResult<V::Value>
+    fn deserialize_bool<V>(self, visitor: V) -> DeserializeResult<V::Value>
     where
-        V: Visitor<'de>
+        V: Visitor<'de>,
     {
-        let s = self.read_string()?;
-
-        visitor.visit_u64(s.parse().unwrap())
+        visitor.visit_bool(self.read_field::<i32>()? != 0)
     }
 
     fn deserialize_str<V>(self, visitor: V) -> DeserializeResult<V::Value>
         where V: serde::de::Visitor<'de>
     {
-        visitor.visit_str(&self.read_string()?)
+        visitor.visit_str(&self.read_field::<String>()?)
     }
 
-    fn deserialize_string<V>(self, visitor: V) -> DeserializeResult<V::Value>
+    fn deserialize_enum<V>( self,
+                             _name: &'static str,
+                             _variants: &'static [&'static str],
+                             visitor: V)
+                             -> DeserializeResult<V::Value>
         where V: serde::de::Visitor<'de>
     {
-        visitor.visit_string(self.read_string()?)
+        visitor.visit_enum(self)
     }
 
     fn deserialize_struct<V>(self,
@@ -125,9 +177,103 @@ impl<'de, 'a, R: BufRead> serde::Deserializer<'de> for &'a mut Deserializer<R> {
         })
     }
 
-    forward_to_deserialize_any! {
-        bool i8 i16 i32 i64 i128 u8 u16 u32 u128 f32 f64 char
-        bytes byte_buf option unit unit_struct newtype_struct seq //tuple
-        tuple_struct map enum identifier ignored_any
+    fn deserialize_unit<V>(self, visitor: V) -> DeserializeResult<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        visitor.visit_unit()
+    }
+
+    fn deserialize_unit_struct<V>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> DeserializeResult<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        visitor.visit_unit()
+    }
+
+    fn deserialize_newtype_struct<V>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> DeserializeResult<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        visitor.visit_newtype_struct(self)
+    }
+
+    fn deserialize_tuple_struct<V>(
+        self,
+        _name: &'static str,
+        _len: usize,
+        _visitor: V,
+    ) -> DeserializeResult<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        unimplemented!();
+    }
+
+    deserialize_unimplemented!(deserialize_any);
+    deserialize_unimplemented!(deserialize_char);
+    deserialize_unimplemented!(deserialize_bytes);
+    deserialize_unimplemented!(deserialize_byte_buf);
+    deserialize_unimplemented!(deserialize_option);
+    deserialize_unimplemented!(deserialize_map);
+    deserialize_unimplemented!(deserialize_seq);
+    deserialize_unimplemented!(deserialize_identifier);
+    deserialize_unimplemented!(deserialize_ignored_any);
+}
+
+impl<'de, 'a, R: BufRead + 'a> serde::de::EnumAccess<'de> for &'a mut Deserializer<R>
+{
+    type Error = SerdeError;
+    type Variant = Self;
+
+    fn variant_seed<V>(self, seed: V) -> DeserializeResult<(V::Value, Self::Variant)>
+    where
+        V: serde::de::DeserializeSeed<'de>,
+    {
+        use serde::de::IntoDeserializer;
+
+        let id: String = serde::de::Deserialize::deserialize(&mut *self)?;
+        let val: DeserializeResult<_> = seed.deserialize(id.into_deserializer());
+        Ok((val?, self))
+    }
+}
+
+impl<'de, 'a, R> serde::de::VariantAccess<'de> for &'a mut Deserializer<R>
+where
+    R: BufRead,
+{
+    type Error = SerdeError;
+
+    fn unit_variant(self) -> DeserializeResult<()> {
+        Ok(())
+    }
+
+    fn newtype_variant_seed<T>(self, seed: T) -> DeserializeResult<T::Value>
+    where
+        T: serde::de::DeserializeSeed<'de>,
+    {
+        serde::de::DeserializeSeed::deserialize(seed, self)
+    }
+
+    fn tuple_variant<V>(self, len: usize, visitor: V) -> DeserializeResult<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        serde::de::Deserializer::deserialize_tuple(self, len, visitor)
+    }
+
+    fn struct_variant<V>(self, fields: &'static [&'static str], visitor: V) -> DeserializeResult<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        serde::de::Deserializer::deserialize_tuple(self, fields.len(), visitor)
     }
 }
