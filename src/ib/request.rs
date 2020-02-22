@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 /// Also see EClient.h / EClient.cpp
 #[derive(Debug, Deserialize, Serialize)]
 pub enum Request {
+    #[serde(rename="5\01")]
+    ReqOpenOrders,
     #[serde(rename="6\02")]
     ReqAcctData { subscribe: bool, acct_code: String },
     #[serde(rename="16\01")]

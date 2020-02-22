@@ -1,7 +1,7 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::ib::*;
-use crate::ib::types::*;
+use crate::protocol::order::OpenOrderMessage;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Hello {
@@ -11,10 +11,12 @@ pub struct Hello {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum Message {
+    #[serde(rename="3")]
+    OrderStatus, // TODO
     #[serde(rename="4")]
     ErrMsg { version: i32, id: i32, error_code: i32, error_msg: String },
     #[serde(rename="5")]
-    OpenOrder, // TODO
+    OpenOrder(OpenOrder),
     #[serde(rename="6")]
     AcctValue { version: i32, key: String, val: String, cur: String, account_name: String },
     #[serde(rename="7")]
@@ -27,13 +29,27 @@ pub enum Message {
     ManagedAccts { version: i32, accounts_list: String },
     #[serde(rename="54")]
     AcctDownloadEnd { version: i32, account: String },
-    #[serde(rename="61")]
-    PositionData { version: i32, account: String, contract: PositionDataContract, position: f64, avg_cost: f64 },
+    #[serde(rename="61", deserialize_with="decode_61")]
+    PositionData { version: i32, account: String, contract: Contract, position: f64, avg_cost: f64 },
     #[serde(rename="62")]
     PositionDataEnd { version: i32 },
 
     /// Not actual IB message, used to encode an unknown message
     UnknownMessage(String),
+}
+
+fn decode_61<'de, D: Deserializer<'de>>(deserializer: D) -> Result<(i32, String, Contract, f64, f64), D::Error> {
+    #[derive(Deserialize)]
+    struct Message61 {
+        version: i32,
+        account: String,
+        contract: PositionDataContract,
+        position: f64,
+        avg_cost: f64
+    }
+
+    Message61::deserialize(deserializer)
+        .map(|m| (m.version, m.account, m.contract.into(), m.position, m.avg_cost))
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -104,9 +120,16 @@ impl From<PortfolioValueContract> for Contract {
     }
 }
 
+/// Note that the official client has 2 kinds of optional fields. The explicit optional field uses
+/// i32/f64::MAX to indicate a None value, while all other numeric/bool fields default to 0 if server
+/// sends "" (which becomes false for bool)
+///
+/// We use Option here and in ib::* for all explicitly optional fields, and .unwrap_or_default()
+/// for all fields where "" has been encountered.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-pub struct  DeltaNeutralContract {
-    pub conid: i32,
-    pub delta: f64,
-    pub price: f64,
+#[serde(from="OpenOrderMessage")]
+pub struct OpenOrder {
+    pub contract: Contract,
+    pub order: Order,
+    pub state: OrderState,
 }

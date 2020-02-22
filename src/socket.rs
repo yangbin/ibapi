@@ -9,15 +9,6 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use crate::protocol;
 use crate::ib::{Hello, Message, Request};
 
-const VERSION: &'static str = "twsapi_macunix.970.01";
-
-const DEFAULT_HOST: &'static str = "127.0.0.1";
-const DEFAULT_PORT: u64 = 7496;
-const DEFAULT_CLIENT_ID: u64 = 0;
-
-const CLIENT_VERSION: u64 = 71;
-const SERVER_VERSION: u64 = 38;
-
 pub struct Socket {
     pub rx: Receiver<Message>,
     pub tx: Sender<Request>,
@@ -32,7 +23,7 @@ impl Socket {
 
         stream.write_all("API\0".as_bytes()).unwrap();
 
-        let version = "v100..151".as_bytes();
+        let version = "v100..155".as_bytes();
         stream.write_all(&(version.len() as u32).to_be_bytes()).unwrap();
         stream.write_all(version).unwrap();
 

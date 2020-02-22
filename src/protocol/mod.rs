@@ -9,6 +9,7 @@ use self::ser::Serializer;
 
 pub mod de;
 pub mod ser;
+pub mod order;
 
 /// Deserializes directly from a `Buffer`ed Reader.
 ///
@@ -62,7 +63,7 @@ impl std::error::Error for Error {
         }
     }
 
-    fn cause(&self) -> Option<&std::error::Error> {
+    fn cause(&self) -> Option<&dyn std::error::Error> {
         match *self {
             Error::Io(ref err) => Some(err),
             Error::SequenceMustHaveLength => None,

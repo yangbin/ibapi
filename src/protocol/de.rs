@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::io::{BufRead, Cursor};
 use std::io::Error as IoError;
 use std::str::FromStr;
@@ -19,12 +20,14 @@ pub type DeserializeResult<T> = Result<T, SerdeError>;
 /// represented as a null-terminated string.
 pub struct Deserializer<R> {
     reader: R,
+    peek: Option<Vec<u8>>,
 }
 
 impl<R: BufRead> Deserializer<R> {
     pub fn new(r: R) -> Deserializer<R> {
         Deserializer {
             reader: r,
+            peek: None,
         }
     }
 
@@ -44,7 +47,7 @@ impl<R: BufRead> Deserializer<R> {
         Ok(Deserializer::new(Cursor::new(buffer)))
     }
 
-    fn read_field<T: FromStr>(&mut self) -> DeserializeResult<T> {
+    fn decode_field(&mut self) -> DeserializeResult<Vec<u8>> {
         let mut buffer = Vec::new();
         let len = self.reader.read_until(EOL, &mut buffer)
             .map_err(convert_io_error)?;
@@ -54,13 +57,36 @@ impl<R: BufRead> Deserializer<R> {
         }
 
         buffer.pop(); // throw away EOL
-        debug!(">>> {:?}", buffer);
-        debug!("  > {}", String::from_utf8_lossy(&buffer));
 
-        std::str::from_utf8(&buffer)
+        debug!(">>> {:?}", buffer);
+        debug!(" >> {}", std::str::from_utf8(&buffer).unwrap_or_default());
+
+        Ok(buffer)
+    }
+
+    fn peek<'a>(&'a mut self) -> DeserializeResult<&'a [u8]> {
+        self.peek = Some(self.decode_field()?);
+        Ok(self.peek.as_deref().unwrap())
+    }
+
+    fn discard_peek(&mut self) {
+        self.peek = None;
+    }
+
+    fn read_field<T: FromStr + Debug>(&mut self) -> DeserializeResult<T> {
+        let buffer = match self.peek.take() {
+            Some(b) => b,
+            None => self.decode_field()?
+        };
+
+        let parsed = std::str::from_utf8(&buffer)
             .map_err(SerdeError::custom)?
             .parse()
-            .map_err(|_| SerdeError::custom(format!("Parse error: expected {}", std::any::type_name::<T>())))
+            .map_err(|_| SerdeError::custom(format!("Parse error: expected {}", std::any::type_name::<T>())))?;
+
+        debug!("  > {:?}", parsed);
+
+        Ok(parsed)
     }
 }
 
@@ -111,7 +137,7 @@ impl<'de, 'a, R: BufRead> serde::Deserializer<'de> for &'a mut Deserializer<R> {
     }
 
     fn deserialize_str<V>(self, visitor: V) -> DeserializeResult<V::Value>
-        where V: serde::de::Visitor<'de>
+        where V: Visitor<'de>
     {
         visitor.visit_str(&self.read_field::<String>()?)
     }
@@ -121,7 +147,7 @@ impl<'de, 'a, R: BufRead> serde::Deserializer<'de> for &'a mut Deserializer<R> {
                              _variants: &'static [&'static str],
                              visitor: V)
                              -> DeserializeResult<V::Value>
-        where V: serde::de::Visitor<'de>
+        where V: Visitor<'de>
     {
         visitor.visit_enum(self)
     }
@@ -131,14 +157,14 @@ impl<'de, 'a, R: BufRead> serde::Deserializer<'de> for &'a mut Deserializer<R> {
                              fields: &'static [&'static str],
                              visitor: V)
                              -> DeserializeResult<V::Value>
-        where V: serde::de::Visitor<'de>
+        where V: Visitor<'de>
     {
         self.deserialize_tuple(fields.len(), visitor)
     }
 
     fn deserialize_tuple<V>(self, len: usize, visitor: V) -> DeserializeResult<V::Value>
     where
-        V: serde::de::Visitor<'de>,
+        V: Visitor<'de>,
     {
         struct Access<'a, R: BufRead> {
             deserializer: &'a mut Deserializer<R>,
@@ -161,7 +187,8 @@ impl<'de, 'a, R: BufRead> serde::Deserializer<'de> for &'a mut Deserializer<R> {
                         &mut *self.deserializer,
                     )?;
                     Ok(Some(value))
-                } else {
+                }
+                else {
                     Ok(None)
                 }
             }
@@ -175,6 +202,15 @@ impl<'de, 'a, R: BufRead> serde::Deserializer<'de> for &'a mut Deserializer<R> {
             deserializer: self,
             len: len,
         })
+    }
+
+    fn deserialize_seq<V>(self, visitor: V) -> DeserializeResult<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        let len = serde::Deserialize::deserialize(&mut *self)?;
+
+        self.deserialize_tuple(len, visitor)
     }
 
     fn deserialize_unit<V>(self, visitor: V) -> DeserializeResult<V::Value>
@@ -218,13 +254,28 @@ impl<'de, 'a, R: BufRead> serde::Deserializer<'de> for &'a mut Deserializer<R> {
         unimplemented!();
     }
 
+    fn deserialize_option<V>(self, visitor: V) -> DeserializeResult<V::Value>
+    where
+        V: Visitor<'de>,
+    {
+        match self.peek()? {
+            b"" | // Option<String> or Option<(String, ...)> etc
+            b"2147483647" |           // std::i32::MAX
+            b"9223372036854775807" |  // std::i64::MAX
+            b"1.7976931348623157E308" // std::f64::MAX
+                => {
+                    self.discard_peek();
+                    visitor.visit_none()
+                },
+            _ => visitor.visit_some(&mut *self),
+        }
+    }
+
     deserialize_unimplemented!(deserialize_any);
     deserialize_unimplemented!(deserialize_char);
     deserialize_unimplemented!(deserialize_bytes);
     deserialize_unimplemented!(deserialize_byte_buf);
-    deserialize_unimplemented!(deserialize_option);
     deserialize_unimplemented!(deserialize_map);
-    deserialize_unimplemented!(deserialize_seq);
     deserialize_unimplemented!(deserialize_identifier);
     deserialize_unimplemented!(deserialize_ignored_any);
 }
@@ -240,7 +291,7 @@ impl<'de, 'a, R: BufRead + 'a> serde::de::EnumAccess<'de> for &'a mut Deserializ
     {
         use serde::de::IntoDeserializer;
 
-        let id: String = serde::de::Deserialize::deserialize(&mut *self)?;
+        let id: String = serde::Deserialize::deserialize(&mut *self)?;
         let val: DeserializeResult<_> = seed.deserialize(id.into_deserializer());
         Ok((val?, self))
     }
