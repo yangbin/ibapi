@@ -16,14 +16,20 @@ pub struct Contract {
     pub currency: String,
     pub local_symbol: String,
     pub trading_class: String,
+    #[serde(skip_serializing)]
     pub sec_id_type: String, // CUSIP;SEDOL;ISIN;RIC
+    #[serde(skip_serializing)]
     pub sec_id: String,
 
+    #[serde(skip_serializing)]
     pub delta_neutral_contract: Option<DeltaNeutralContract>,
+    #[serde(skip_serializing)]
     pub include_expired: bool,  // can not be set to true for orders
 
     // COMBOS
+    #[serde(skip_serializing)]
     pub combo_legs_descrip: String, // received in open order version 14 and up for all combos 
+    #[serde(skip_serializing)]
     pub combo_legs: Vec<ComboLeg>,
 }
 
@@ -67,11 +73,15 @@ pub struct ComboLeg {
     pub action: Action,
 
     pub exchange: String,
+    #[serde(skip_serializing)]
     pub open_close: LegOpenClose, 
 
     /// for stock legs when doing short sale
+    #[serde(skip_serializing)]
     pub short_sale_slot: ShortSaleSlot,
+    #[serde(skip_serializing)]
     pub designated_location: String,
+    #[serde(skip_serializing)]
     pub exempt_code: i32,
 }
 
